@@ -24,7 +24,7 @@ jobs:
           context: .
           file: ./Dockerfile
           tags: |
-            bilibili-fetcher:${GITHUB_SHA:0:7}
+            bilibili-fetcher:${{ github.sha }}
             bilibili-fetcher:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
