@@ -1,9 +1,9 @@
-FROM python:3.11 AS builder
+FROM python:3.11.11 AS builder
 WORKDIR /build
 COPY requirements.txt .
 RUN pip install --user --no-cache-dir -r requirements.txt
 
-FROM python:3.11-slim
+FROM python:3.11.11-slim
 WORKDIR /app/BilibiliHistoryFetcher
 COPY --from=builder /root/.local /root/.local
 COPY . .
