@@ -8,8 +8,6 @@ except ImportError:
 from datetime import datetime
 from typing import Optional
 
-import jieba
-import jieba.analyse
 from fastapi import APIRouter, Query, HTTPException
 from pydantic import BaseModel
 
@@ -131,13 +129,14 @@ async def get_years():
         "data": years
     }
 
-def _process_image_url(url: str, image_type: str, use_local: bool) -> str:
+def _process_image_url(url: str, image_type: str, use_local: bool, use_sessdata: bool = True) -> str:
     """处理图片URL，根据需要返回本地路径或原始URL
 
     Args:
         url: 原始图片URL
         image_type: 图片类型 (covers 或 avatars)
         use_local: 是否使用本地图片
+        use_sessdata: 是否在下载图片时使用SESSDATA（对于公开内容如视频封面和头像，可以不使用SESSDATA）
 
     Returns:
         str: 处理后的URL
@@ -145,11 +144,16 @@ def _process_image_url(url: str, image_type: str, use_local: bool) -> str:
 
     # 如果不使用本地图片或URL为空,直接返回原始URL
     if not use_local or not url:
+        # 如果不使用SESSDATA，移除URL中可能包含的SESSDATA参数
+        if not use_sessdata and '?' in url:
+            # 移除URL中的所有参数，保留纯净的图片URL
+            url = url.split('?')[0]
         return url
 
     try:
-        # 计算URL的哈希值
-        file_hash = hashlib.md5(url.encode()).hexdigest()
+        # 计算URL的哈希值（只使用基本URL部分，不包含参数）
+        base_url = url.split('?')[0] if '?' in url else url
+        file_hash = hashlib.md5(base_url.encode()).hexdigest()
 
         # 检查图片类型是否有效
         if image_type not in ('covers', 'avatars'):
@@ -166,23 +170,24 @@ def _process_image_url(url: str, image_type: str, use_local: bool) -> str:
         print(f"处理图片URL时出错: {str(e)}")
         return url
 
-def _process_record(record: dict, use_local: bool) -> dict:
+def _process_record(record: dict, use_local: bool, use_sessdata: bool = True) -> dict:
     """处理单条记录，转换图片URL
 
     Args:
         record: 原始记录
         use_local: 是否使用本地图片
+        use_sessdata: 是否在下载图片时使用SESSDATA
 
     Returns:
         dict: 处理后的记录
     """
     # 处理封面图片
     if 'cover' in record and record['cover']:
-        record['cover'] = _process_image_url(record['cover'], 'covers', use_local)
+        record['cover'] = _process_image_url(record['cover'], 'covers', use_local, use_sessdata)
 
     # 处理作者头像
     if 'author_face' in record and record['author_face']:
-        record['author_face'] = _process_image_url(record['author_face'], 'avatars', use_local)
+        record['author_face'] = _process_image_url(record['author_face'], 'avatars', use_local, use_sessdata)
 
     # 解析 covers 字段的 JSON 字符串
     if 'covers' in record and record['covers']:
@@ -192,7 +197,7 @@ def _process_record(record: dict, use_local: bool) -> dict:
                 covers = json.loads(record['covers'])
                 # 处理每个封面URL
                 if isinstance(covers, list):
-                    record['covers'] = [_process_image_url(url, 'covers', use_local) for url in covers]
+                    record['covers'] = [_process_image_url(url, 'covers', use_local, use_sessdata) for url in covers]
                 else:
                     record['covers'] = []
             else:
@@ -214,6 +219,7 @@ async def get_history_page(
     main_category: Optional[str] = Query(None, description="主分区名称"),
     date_range: Optional[str] = Query(None, description="日期范围，格式为yyyyMMdd-yyyyMMdd"),
     use_local_images: bool = Query(False, description="是否使用本地图片"),
+    use_sessdata: bool = Query(True, description="是否在图片URL中使用SESSDATA"),
     business: Optional[str] = Query(None, description="业务类型，如archive(普通视频)、pgc(番剧)、live(直播)、article-list(文集)、article(文章)")
 ):
     """分页查询历史记录，支持跨年份查询"""
@@ -225,6 +231,7 @@ async def get_history_page(
     print(f"主分区名称(main_category): {main_category if main_category else '无'}")
     print(f"日期范围(date_range): {date_range if date_range else '无'}")
     print(f"是否使用本地图片(use_local_images): {use_local_images}")
+    print(f"是否使用SESSDATA(use_sessdata): {use_sessdata}")
     print(f"业务类型(business): {business if business else '全部'}")
     print("=====================\n")
 
@@ -308,7 +315,7 @@ async def get_history_page(
 
         for row in cursor.fetchall():
             record = dict(zip(columns, row))
-            record = _process_record(record, use_local_images)
+            record = _process_record(record, use_local_images, use_sessdata)
             records.append(record)
 
         print("=== 响应结果 ===")
@@ -335,24 +342,21 @@ async def get_history_page(
         if conn:
             conn.close()
 
-def process_search_keyword(keyword: str) -> list:
-    """处理搜索关键词，返回分词列表
+def process_search_keyword(keyword: str) -> str:
+    """处理搜索关键词，返回处理后的关键词
 
     Args:
         keyword: 搜索关键词
 
     Returns:
-        list: 分词列表
+        str: 处理后的关键词
     """
     if not keyword:
-        return []
+        return ""
 
-    # 1. 移除多余的空格，但保留单个空格
+    # 移除多余的空格，但保留单个空格
     keyword = ' '.join(keyword.split())
-
-    # 2. 分词处理 - 使用jieba的默认分词
-    words = list(jieba.cut_for_search(keyword))
-    return [w.strip() for w in words if w.strip()]
+    return keyword
 
 def create_fts_table(conn, table_name: str):
     """创建全文搜索虚拟表"""
@@ -429,7 +433,7 @@ def create_fts_table(conn, table_name: str):
         conn.rollback()
         return False
 
-def build_field_search_conditions(field: str, search: str, words: list, exact_match: bool) -> tuple:
+def build_field_search_conditions(field: str, search: str, exact_match: bool) -> tuple:
     """构建字段搜索条件"""
     params = []
     conditions = []
@@ -439,18 +443,9 @@ def build_field_search_conditions(field: str, search: str, words: list, exact_ma
         conditions.append(f"{field} = ?")
         params.append(search)
     else:
-        # 1. 完整关键词模糊匹配
+        # 模糊匹配
         conditions.append(f"{field} LIKE ?")
         params.append(f"%{search}%")
-
-        # 2. 分词匹配 - 任一分词匹配即可
-        if words:
-            word_conditions = []
-            for word in words:
-                word_conditions.append(f"{field} LIKE ?")
-                params.append(f"%{word}%")
-            if word_conditions:
-                conditions.append("(" + " OR ".join(word_conditions) + ")")
 
     # 使用 OR 连接所有条件
     condition = "(" + " OR ".join(conditions) + ")"
@@ -469,7 +464,9 @@ async def search_history(
     search: Optional[str] = Query(None, description="搜索关键词"),
     search_type: Optional[str] = Query("all", description="搜索类型：all-全部, title-标题, author-作者, tag-分区, remark-备注"),
     exact_match: bool = Query(False, description="是否精确匹配"),
-    sort_by: Optional[str] = Query("view_at", description="排序字段：view_at-观看时间, relevance-相关度")
+    sort_by: Optional[str] = Query("view_at", description="排序字段：view_at-观看时间, relevance-相关度"),
+    use_sessdata: bool = Query(True, description="是否在图片URL中使用SESSDATA"),
+    use_local_images: bool = Query(False, description="是否使用本地图片")
 ):
     """高级搜索历史记录"""
     try:
@@ -477,6 +474,8 @@ async def search_history(
         print(f"关键词: {search}")
         print(f"类型: {search_type}")
         print(f"精确匹配: {exact_match}")
+        print(f"是否使用SESSDATA: {use_sessdata}")
+        print(f"是否使用本地图片: {use_local_images}")
         print("==============\n")
 
         conn = get_db()
@@ -505,8 +504,8 @@ async def search_history(
         where_clause = ""
         search_params = []
         if search:
-            words = process_search_keyword(search)
-            print(f"\n分词结果: {words}\n")
+            search = process_search_keyword(search)
+            print(f"\n处理后的搜索关键词: {search}\n")
 
             print("\n=== 开始构建查询条件 ===")
 
@@ -515,7 +514,7 @@ async def search_history(
                 field_conditions = []
                 for field_name, field in field_map.items():
                     print(f"\n处理字段: {field_name}")
-                    condition, params = build_field_search_conditions(field, search, words, exact_match)
+                    condition, params = build_field_search_conditions(field, search, exact_match)
                     field_conditions.append(condition)
                     search_params.extend(params)
                     print(f"当前参数数量: {len(search_params)}")
@@ -525,7 +524,7 @@ async def search_history(
             else:
                 field = field_map.get(search_type)
                 if field:
-                    condition, params = build_field_search_conditions(field, search, words, exact_match)
+                    condition, params = build_field_search_conditions(field, search, exact_match)
                     where_clause = f"WHERE {condition}"
                     search_params.extend(params)
 
@@ -594,7 +593,7 @@ async def search_history(
 
         for row in cursor.fetchall():
             record = dict(zip(columns, row))
-            record = _process_record(record, False)
+            record = _process_record(record, use_local_images, use_sessdata)
             records.append(record)
 
         return {
@@ -1005,7 +1004,8 @@ async def get_video_remarks(request: BatchRemarksRequest):
 @router.get("/by_cid/{cid}", summary="根据CID查询视频详情")
 async def get_video_by_cid(
     cid: int,
-    use_local_images: bool = Query(False, description="是否使用本地图片")
+    use_local_images: bool = Query(False, description="是否使用本地图片"),
+    use_sessdata: bool = Query(True, description="是否在图片URL中使用SESSDATA")
 ):
     """
     根据视频CID查询详细信息
@@ -1013,6 +1013,7 @@ async def get_video_by_cid(
     Args:
         cid: 视频的CID
         use_local_images: 是否使用本地图片
+        use_sessdata: 是否在图片URL中使用SESSDATA
 
     Returns:
         视频的详细信息，包括标题、封面和作者信息
@@ -1073,7 +1074,7 @@ async def get_video_by_cid(
         print(f"【调试】原始记录: {record_dict}")
 
         # 处理图片URL
-        record_dict = _process_record(record_dict, use_local_images)
+        record_dict = _process_record(record_dict, use_local_images, use_sessdata)
 
         # 添加视频的播放时间（人类可读格式）
         if 'view_at' in record_dict and record_dict['view_at']:

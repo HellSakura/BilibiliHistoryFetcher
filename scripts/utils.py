@@ -1,4 +1,3 @@
-import logging
 import os
 import sqlite3
 import sys
@@ -6,6 +5,7 @@ from datetime import datetime
 from typing import Dict, Any
 
 import yaml
+from loguru import logger
 
 
 def get_base_path() -> str:
@@ -41,15 +41,15 @@ def load_config() -> Dict[str, Any]:
         if not os.path.exists(config_path):
             # 打印更多调试信息
             base_path = get_base_path()
-            print(f"\n=== 配置文件信息 ===")
-            print(f"当前基础路径: {base_path}")
-            print(f"尝试加载配置文件: {config_path}")
-            print(f"当前目录内容: {os.listdir(base_path)}")
+            logger.debug(f"\n=== 配置文件信息 ===")
+            logger.debug(f"当前基础路径: {base_path}")
+            logger.debug(f"尝试加载配置文件: {config_path}")
+            logger.debug(f"当前目录内容: {os.listdir(base_path)}")
             if os.path.exists(os.path.dirname(config_path)):
-                print(f"配置目录内容: {os.listdir(os.path.dirname(config_path))}")
-            print("=====================\n")
+                logger.debug(f"配置目录内容: {os.listdir(os.path.dirname(config_path))}")
+            logger.debug("=====================\n")
             raise FileNotFoundError(f"配置文件不存在: {config_path}")
-            
+
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
 
@@ -57,13 +57,13 @@ def load_config() -> Dict[str, Any]:
         email_config = config.get('email', {})
         required_fields = ['smtp_server', 'smtp_port', 'sender', 'password', 'receiver']
         missing_fields = [field for field in required_fields if not email_config.get(field)]
-        
+
         if missing_fields:
             raise ValueError(f"邮件配置缺少必要字段: {', '.join(missing_fields)}")
-        
+
         return config
     except Exception as e:
-        logging.error(f"加载配置文件失败: {str(e)}")
+        logger.error(f"加载配置文件失败: {str(e)}")
         raise
 
 def get_output_path(*paths: str) -> str:
@@ -76,20 +76,48 @@ def get_output_path(*paths: str) -> str:
     """
     # 总是使用exe所在目录（或项目根目录）作为基础路径
     base_path = get_base_path()
-    
+
     # 基础输出目录
     output_dir = os.path.join(base_path, 'output')
-    
+
     # 创建基础输出目录
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    
+
     # 组合完整路径
     full_path = os.path.join(output_dir, *paths)
-    
+
     # 确保父目录存在
     os.makedirs(os.path.dirname(full_path), exist_ok=True)
-    
+
+    return full_path
+
+def get_database_path(*paths: str) -> str:
+    """
+    获取数据库文件路径
+    Args:
+        *paths: 路径片段
+    Returns:
+        完整的数据库路径
+    """
+    # 总是使用exe所在目录（或项目根目录）作为基础路径
+    base_path = get_base_path()
+
+    # 基础数据库目录
+    database_dir = os.path.join(base_path, 'output', 'database')
+
+    # 创建基础数据库目录
+    if not os.path.exists(database_dir):
+        os.makedirs(database_dir)
+
+    # 组合完整路径
+    full_path = os.path.join(database_dir, *paths)
+
+    # 确保父目录存在
+    parent_dir = os.path.dirname(full_path)
+    if parent_dir != database_dir:  # 避免重复创建database_dir
+        os.makedirs(parent_dir, exist_ok=True)
+
     return full_path
 
 def get_logs_path() -> str:
@@ -105,5 +133,5 @@ def get_logs_path() -> str:
 
 def get_db():
     """获取数据库连接"""
-    db_path = get_output_path('bilibili_history.db')
+    db_path = get_database_path('bilibili_history.db')
     return sqlite3.connect(db_path)
